@@ -13,6 +13,7 @@ import (
 	"github.com/traefik/traefik/v3/pkg/config/dynamic"
 	"github.com/traefik/traefik/v3/pkg/middlewares"
 	"github.com/traefik/traefik/v3/pkg/middlewares/compress/brotli"
+	"github.com/traefik/traefik/v3/pkg/middlewares/compress/zstd"
 	"github.com/traefik/traefik/v3/pkg/tracing"
 )
 
@@ -29,6 +30,7 @@ type compress struct {
 	excludes []string
 	minSize  int
 
+	zstdHandler   http.Handler
 	brotliHandler http.Handler
 	gzipHandler   http.Handler
 }
@@ -60,6 +62,11 @@ func New(ctx context.Context, next http.Handler, conf dynamic.Compress, name str
 	}
 
 	var err error
+	c.zstdHandler, err = c.newZstdHandler()
+	if err != nil {
+		return nil, err
+	}
+
 	c.brotliHandler, err = c.newBrotliHandler()
 	if err != nil {
 		return nil, err
@@ -101,6 +108,11 @@ func (c *compress) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	if encodingAccepts(acceptEncoding, "zstd") {
+		c.zstdHandler.ServeHTTP(rw, req)
+		return
+	}
+
 	if encodingAccepts(acceptEncoding, "br") {
 		c.brotliHandler.ServeHTTP(rw, req)
 		return
@@ -139,6 +151,20 @@ func (c *compress) newBrotliHandler() (http.Handler, error) {
 	wrapper, err := brotli.NewWrapper(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("new brotli wrapper: %w", err)
+	}
+
+	return wrapper(c.next), nil
+}
+
+func (c *compress) newZstdHandler() (http.Handler, error) {
+	cfg := zstd.Config{
+		ExcludedContentTypes: c.excludes,
+		MinSize:              c.minSize,
+	}
+
+	wrapper, err := zstd.NewWrapper(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("new zstd wrapper: %w", err)
 	}
 
 	return wrapper(c.next), nil
